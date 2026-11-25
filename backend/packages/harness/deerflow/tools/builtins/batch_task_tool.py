@@ -32,6 +32,7 @@ from deerflow.subagents.batch_runtime import (
     SubagentBatchSubmitter,
     get_subagent_batch_submitter,
 )
+from deerflow.subagents.config import resolve_subagent_mcp_plugins
 from deerflow.subagents.registry import get_available_subagent_names, get_subagent_config
 from deerflow.tools.sync import make_sync_tool_wrapper
 from deerflow.tools.types import Runtime
@@ -254,7 +255,7 @@ async def batch_task(
         "subagent_config": {**asdict(config), "prompt_overlay": config.prompt_overlay.model_dump()},
         "parent_model": metadata.get("model_name"),
         "tool_groups": metadata.get("tool_groups"),
-        "mcp_plugins": metadata.get("mcp_plugins"),
+        "mcp_plugins": resolve_subagent_mcp_plugins(config, metadata.get("mcp_plugins")),
         "user_role": context.get("user_role"),
         "oauth_provider": context.get("oauth_provider"),
         "oauth_id": context.get("oauth_id"),

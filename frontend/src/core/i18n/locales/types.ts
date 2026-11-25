@@ -2102,6 +2102,14 @@ export interface Translations {
       inheritModel: string;
       tools: string;
       skills: string;
+      mcpPlugins: string;
+      mcpModeInherit: string;
+      mcpModeNone: string;
+      mcpModeSelected: string;
+      mcpEmpty: string;
+      mcpLoadError: string;
+      mcpDisabledTag: string;
+      mcpToolsHint: string;
       listModeAll: string;
       listModeNone: string;
       listModeSelected: string;

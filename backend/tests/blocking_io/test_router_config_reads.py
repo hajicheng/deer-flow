@@ -34,7 +34,7 @@ import deerflow.authz.sandbox_authz as sandbox_authz
 import deerflow.community.browser_automation  # noqa: F401  (imported lazily by browser_stream)
 import deerflow.config as deerflow_config
 from app.gateway.authz import Permissions
-from app.gateway.routers import agents, artifacts, browser, channel_connections, console, memory, projects, scheduled_tasks
+from app.gateway.routers import agents, artifacts, browser, channel_connections, console, memory, projects, scheduled_tasks, subagents
 from deerflow.config.agents_api_config import load_agents_api_config_from_dict
 from deerflow.config.channel_connections_config import ChannelConnectionsConfig
 from deerflow.config.memory_config import MemoryConfig
@@ -363,6 +363,56 @@ async def test_artifact_update_reads_the_sandbox_policy_off_the_loop(tmp_path: P
 
     assert exc_info.value.status_code == 403
     assert acquire.await_args.kwargs["app_config"] is app_config
+    assert reads.on_loop == [False]
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+async def test_managed_subagent_mcp_validation_reads_config_off_the_loop(operation: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deerflow.config.app_config import AppConfig
+    from deerflow.config.extensions_config import ExtensionsConfig
+    from deerflow.config.sandbox_config import SandboxConfig
+    from deerflow.persistence.managed_subagents import ManagedSubagentDefinition
+
+    app_config = AppConfig(
+        sandbox=SandboxConfig(use="deerflow.sandbox.local:LocalSandboxProvider"),
+        extensions=ExtensionsConfig.model_validate({"mcpServers": {"jira": {"enabled": True, "capability": {"id": "jira-id"}}}}),
+    )
+    reads = _ConfigRead(app_config)
+    monkeypatch.setattr(subagents, "get_app_config", reads)
+    monkeypatch.setattr(subagents, "require_admin_user", AsyncMock())
+
+    existing = ManagedSubagentDefinition(
+        name="specialist",
+        description="Domain specialist",
+        system_prompt="Handle domain work.",
+        mcp_plugins=["jira-id"],
+    )
+
+    class _Store:
+        def get(self, _name: str) -> ManagedSubagentDefinition:
+            return existing
+
+    monkeypatch.setattr(subagents, "get_managed_subagent_store", lambda *_: _Store())
+
+    with pytest.raises(HTTPException) as exc_info:
+        if operation == "create":
+            await subagents.create_managed_subagent(
+                _request(),
+                subagents.ManagedSubagentCreateRequest(
+                    name="specialist",
+                    description="Domain specialist",
+                    system_prompt="Handle domain work.",
+                    mcp_plugins=["unknown-id"],
+                ),
+            )
+        else:
+            await subagents.update_managed_subagent(
+                "specialist",
+                _request(),
+                subagents.ManagedSubagentUpdateRequest(mcp_plugins=["unknown-id"]),
+            )
+
+    assert exc_info.value.status_code == 422
     assert reads.on_loop == [False]
 
 

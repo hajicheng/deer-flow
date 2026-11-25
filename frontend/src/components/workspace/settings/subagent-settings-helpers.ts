@@ -1,4 +1,5 @@
 export type OptionalNameListMode = "all" | "none" | "selected";
+export type McpPluginsMode = "inherit" | "none" | "selected";
 
 export function optionalNameListToDraft(value: string[] | null): {
   mode: OptionalNameListMode;
@@ -20,6 +21,38 @@ export function optionalNameListFromDraft(
     .map((item) => item.trim())
     .filter(Boolean);
   return Array.from(new Set(values));
+}
+
+export function mcpPluginsToDraft(value: string[] | null | undefined): {
+  mode: McpPluginsMode;
+  selected: string[];
+} {
+  if (value == null) return { mode: "inherit", selected: [] };
+  if (value.length === 0) return { mode: "none", selected: [] };
+  return { mode: "selected", selected: Array.from(new Set(value)) };
+}
+
+export function mcpPluginsFromDraft(
+  mode: McpPluginsMode,
+  selected: string[],
+): string[] | null {
+  if (mode === "inherit") return null;
+  if (mode === "none") return [];
+  return Array.from(
+    new Set(selected.map((item) => item.trim()).filter(Boolean)),
+  );
+}
+
+export function sameOptionalStringList(
+  left: string[] | null | undefined,
+  right: string[] | null | undefined,
+): boolean {
+  const a = left ?? null;
+  const b = right ?? null;
+  if (a === null || b === null) return a === b;
+  const setA = new Set(a);
+  const setB = new Set(b);
+  return setA.size === setB.size && [...setA].every((id) => setB.has(id));
 }
 
 export function positiveInteger(value: string): number | null {

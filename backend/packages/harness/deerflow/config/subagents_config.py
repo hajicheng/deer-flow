@@ -10,6 +10,21 @@ from deerflow.config.token_budget_config import TokenBudgetConfig
 
 logger = logging.getLogger(__name__)
 
+
+def _normalize_mcp_plugins(value: list[str] | None) -> list[str] | None:
+    """Validate and deduplicate stable MCP installation IDs."""
+    if value is None:
+        return None
+    normalized: list[str] = []
+    for item in value:
+        stripped = item.strip()
+        if not stripped:
+            raise ValueError("entries must not be blank")
+        if stripped not in normalized:
+            normalized.append(stripped)
+    return normalized
+
+
 DEFAULT_MAX_TOTAL_SUBAGENTS_PER_RUN = 6
 MIN_TOTAL_SUBAGENTS_PER_RUN = 1
 MAX_TOTAL_SUBAGENTS_PER_RUN = 50
@@ -118,6 +133,10 @@ class SubagentOverrideConfig(BaseModel):
         default=None,
         description="Skill names whitelist for this subagent (None = inherit all enabled skills, [] = no skills)",
     )
+    mcp_plugins: list[str] | None = Field(
+        default=None,
+        description="MCP installation IDs for this subagent (None = no override, [] = no MCP plugins)",
+    )
     token_budget: TokenBudgetConfig | None = Field(
         default=None,
         description="Per-run token budget override for this subagent (None = use the global subagents.token_budget default). Symmetric with timeout_seconds/max_turns.",
@@ -127,6 +146,11 @@ class SubagentOverrideConfig(BaseModel):
     @classmethod
     def _reject_boolean_override_backstops(cls, value: object, info: ValidationInfo) -> object:
         return reject_boolean(value, info, kind="an integer")
+
+    @field_validator("mcp_plugins")
+    @classmethod
+    def _validate_override_mcp_plugins(cls, value: list[str] | None) -> list[str] | None:
+        return _normalize_mcp_plugins(value)
 
 
 class CustomSubagentConfig(BaseModel):
@@ -149,6 +173,10 @@ class CustomSubagentConfig(BaseModel):
     skills: list[str] | None = Field(
         default=None,
         description="Skill names whitelist (None = inherit all enabled skills, [] = no skills)",
+    )
+    mcp_plugins: list[str] | None = Field(
+        default=None,
+        description="MCP installation IDs for this subagent (None = inherit parent selection, [] = no MCP plugins)",
     )
     model: str = Field(
         default="inherit",
@@ -177,6 +205,11 @@ class CustomSubagentConfig(BaseModel):
     @classmethod
     def _reject_boolean_custom_backstops(cls, value: object, info: ValidationInfo) -> object:
         return reject_boolean(value, info, kind="an integer")
+
+    @field_validator("mcp_plugins")
+    @classmethod
+    def _validate_custom_mcp_plugins(cls, value: list[str] | None) -> list[str] | None:
+        return _normalize_mcp_plugins(value)
 
 
 class SubagentsAppConfig(BaseModel):
@@ -282,6 +315,20 @@ class SubagentsAppConfig(BaseModel):
             return override.skills
         return None
 
+    def get_mcp_plugins_for(self, agent_name: str) -> list[str] | None:
+        """Get the MCP plugins override for a specific agent.
+
+        Args:
+            agent_name: The name of the subagent.
+
+        Returns:
+            MCP installation ID list if overridden, None otherwise.
+        """
+        override = self.agents.get(agent_name)
+        if override is not None and override.mcp_plugins is not None:
+            return override.mcp_plugins
+        return None
+
     def get_thinking_enabled_for(self, agent_name: str) -> bool | None:
         """Return an explicit per-agent thinking override, including False."""
         override = self.agents.get(agent_name)
@@ -367,6 +414,8 @@ def load_subagents_config_from_dict(config_dict: dict) -> None:
             parts.append(f"reasoning_effort={override.reasoning_effort}")
         if override.skills is not None:
             parts.append(f"skills={override.skills}")
+        if override.mcp_plugins is not None:
+            parts.append(f"mcp_plugins={override.mcp_plugins}")
         if parts:
             overrides_summary[name] = ", ".join(parts)
 

@@ -638,3 +638,105 @@ class TestSkillsFilterPassthrough:
         )
         available = set(config.skills) if config.skills is not None else None
         assert available == {"data-analysis", "web-search"}
+
+
+# ---------------------------------------------------------------------------
+# Subagent mcp_plugins configuration, resolution, and registry layering
+# ---------------------------------------------------------------------------
+
+
+class TestSubagentMcpPluginsConfig:
+    def teardown_method(self):
+        _reset_subagents_config()
+
+    def test_default_mcp_plugins_is_none(self):
+        config = SubagentConfig(name="test", description="test", system_prompt="test")
+        assert config.mcp_plugins is None
+
+    @pytest.mark.parametrize(
+        ("child", "parent", "expected"),
+        [
+            (None, None, None),
+            (None, [], []),
+            (None, ["parent-a"], ["parent-a"]),
+            ([], None, []),
+            ([], [], []),
+            ([], ["parent-a"], []),
+            (["child-b"], None, ["child-b"]),
+            (["child-b"], [], ["child-b"]),
+            (["child-b"], ["parent-a"], ["child-b"]),
+        ],
+    )
+    def test_resolve_subagent_mcp_plugins_tri_state(self, child, parent, expected):
+        from deerflow.subagents.config import resolve_subagent_mcp_plugins
+
+        config = SubagentConfig(name="worker", description="worker", mcp_plugins=child)
+        resolved = resolve_subagent_mcp_plugins(config, parent)
+        assert resolved == expected
+        if resolved is not None:
+            resolved.append("mutated")
+            assert config.mcp_plugins == child
+
+    def test_override_and_custom_normalize_and_reject_blank_mcp_plugins(self):
+        override = SubagentOverrideConfig(mcp_plugins=[" plugin-a ", "plugin-b", "plugin-a"])
+        assert override.mcp_plugins == ["plugin-a", "plugin-b"]
+
+        custom = CustomSubagentConfig(
+            description="Specialist",
+            system_prompt="Use domain MCP.",
+            mcp_plugins=[" plugin-x ", "plugin-x"],
+        )
+        assert custom.mcp_plugins == ["plugin-x"]
+
+        with pytest.raises(ValueError, match="blank"):
+            SubagentOverrideConfig(mcp_plugins=["   "])
+        with pytest.raises(ValueError, match="blank"):
+            CustomSubagentConfig(description="Specialist", system_prompt="Prompt.", mcp_plugins=[""])
+
+    def test_registry_propagates_and_overrides_mcp_plugins_without_mutating_builtin(self):
+        from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "custom_agents": {
+                    "db-specialist": {
+                        "description": "Database worker",
+                        "system_prompt": "Query databases.",
+                        "mcp_plugins": ["pg-plugin"],
+                    },
+                    "lean-worker": {
+                        "description": "No MCP worker",
+                        "system_prompt": "Work locally.",
+                        "mcp_plugins": [],
+                    },
+                },
+                "agents": {
+                    "general-purpose": {"mcp_plugins": ["override-plugin"]},
+                    "bash": {"mcp_plugins": []},
+                },
+            }
+        )
+
+        assert get_subagent_config("db-specialist").mcp_plugins == ["pg-plugin"]
+        assert get_subagent_config("lean-worker").mcp_plugins == []
+        assert get_subagent_config("general-purpose").mcp_plugins == ["override-plugin"]
+        assert get_subagent_config("bash").mcp_plugins == []
+        assert BUILTIN_SUBAGENTS["general-purpose"].mcp_plugins is None
+        assert BUILTIN_SUBAGENTS["bash"].mcp_plugins is None
+
+        load_subagents_config_from_dict(
+            {
+                "custom_agents": {
+                    "db-specialist": {
+                        "description": "Database worker",
+                        "system_prompt": "Query databases.",
+                        "mcp_plugins": ["pg-plugin"],
+                    },
+                },
+                "agents": {
+                    "db-specialist": {"mcp_plugins": []},
+                },
+            }
+        )
+        assert get_subagent_config("db-specialist").mcp_plugins == []

@@ -62,13 +62,21 @@ describe("managed subagent API", () => {
       name: "planner",
       description: "Plans",
       system_prompt: "You plan.",
+      mcp_plugins: ["jira-id"],
     });
-    await updateManagedSubagent("planner", { enabled: false });
+    await updateManagedSubagent("planner", { enabled: false, mcp_plugins: [] });
 
     expect(mockedFetch.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(
+      JSON.parse(mockedFetch.mock.calls[0]?.[1]?.body as string),
+    ).toMatchObject({
+      name: "planner",
+      mcp_plugins: ["jira-id"],
+    });
     expect(mockedFetch.mock.calls[1]?.[1]?.method).toBe("PUT");
     expect(JSON.parse(mockedFetch.mock.calls[1]?.[1]?.body as string)).toEqual({
       enabled: false,
+      mcp_plugins: [],
     });
   });
 

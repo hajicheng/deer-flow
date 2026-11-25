@@ -84,6 +84,27 @@ def test_config_yaml_overrides_remain_explicitly_higher_priority(monkeypatch):
     assert resolved.max_turns == 12
 
 
+def test_managed_mcp_plugins_propagate_and_yield_to_config_override(monkeypatch):
+    managed = ManagedSubagentDefinition(
+        name="planner",
+        description="Managed planner",
+        system_prompt="You are planner.",
+        mcp_plugins=["plugin-db"],
+    )
+    monkeypatch.setattr(registry, "_managed_definitions", lambda **_: [managed])
+
+    resolved = registry.get_subagent_config("planner", app_config=SubagentsAppConfig())
+    assert resolved is not None
+    assert resolved.mcp_plugins == ["plugin-db"]
+
+    overridden = registry.get_subagent_config(
+        "planner",
+        app_config=SubagentsAppConfig(agents={"planner": SubagentOverrideConfig(mcp_plugins=[])}),
+    )
+    assert overridden is not None
+    assert overridden.mcp_plugins == []
+
+
 def test_managed_definitions_cache_reuses_and_invalidates_store_snapshot(monkeypatch):
     class FakeStore:
         def __init__(self):

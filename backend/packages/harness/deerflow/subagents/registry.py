@@ -48,6 +48,7 @@ def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -
         tools=custom.tools,
         disallowed_tools=custom.disallowed_tools,
         skills=custom.skills,
+        mcp_plugins=custom.mcp_plugins,
         model=custom.model,
         thinking_enabled=custom.thinking_enabled,
         reasoning_effort=custom.reasoning_effort,
@@ -98,6 +99,7 @@ def _build_managed_subagent_config(name: str, *, app_config: Any | None = None) 
             tools=definition.tools,
             disallowed_tools=definition.disallowed_tools,
             skills=definition.skills,
+            mcp_plugins=definition.mcp_plugins,
             model=definition.model,
             thinking_enabled=definition.thinking_enabled,
             reasoning_effort=definition.reasoning_effort,
@@ -114,7 +116,7 @@ def get_subagent_config(name: str, *, app_config: Any | None = None) -> Subagent
     1. Built-in subagents (general-purpose, bash)
     2. Custom subagents from config.yaml custom_agents section
     3. Enabled administrator-managed subagents
-    4. Per-agent overrides from config.yaml agents section (timeout, max_turns, model, thinking_enabled, reasoning_effort, skills)
+    4. Per-agent overrides from config.yaml agents section (timeout, max_turns, model, thinking_enabled, reasoning_effort, skills, mcp_plugins)
 
     Args:
         name: The name of the subagent.
@@ -176,6 +178,12 @@ def get_subagent_config(name: str, *, app_config: Any | None = None) -> Subagent
     if effective_skills is not None and effective_skills != config.skills:
         logger.debug("Subagent '%s': skills overridden (%s -> %s)", name, config.skills, effective_skills)
         overrides["skills"] = effective_skills
+
+    # MCP plugins: per-agent override only (no global default)
+    effective_mcp_plugins = subagents_config.get_mcp_plugins_for(name)
+    if effective_mcp_plugins is not None and effective_mcp_plugins != config.mcp_plugins:
+        logger.debug("Subagent '%s': mcp_plugins overridden (%s -> %s)", name, config.mcp_plugins, effective_mcp_plugins)
+        overrides["mcp_plugins"] = effective_mcp_plugins
 
     # Thinking: per-agent override only (no global default)
     effective_thinking = subagents_config.get_thinking_enabled_for(name)

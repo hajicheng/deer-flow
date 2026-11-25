@@ -8,6 +8,7 @@ export interface Subagent {
   tools: string[] | null;
   disallowed_tools: string[] | null;
   skills: string[] | null;
+  mcp_plugins?: string[] | null;
   model: string;
   thinking_enabled?: boolean | null;
   reasoning_effort?: string | null;
@@ -28,6 +29,7 @@ export interface CreateManagedSubagentRequest {
   tools?: string[] | null;
   disallowed_tools?: string[] | null;
   skills?: string[] | null;
+  mcp_plugins?: string[] | null;
   model?: string;
   thinking_enabled?: boolean | null;
   reasoning_effort?: string | null;

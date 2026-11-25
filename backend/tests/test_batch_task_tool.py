@@ -378,3 +378,49 @@ def test_bound_batch_tools_expose_a_sync_invocation_path(monkeypatch) -> None:
     assert message.status == "success"
     assert message.additional_kwargs["subagent_batch_id"] == "subagent-batch-explicit"
     explicit.submit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("subagent_mcp_plugins", "parent_mcp_plugins", "expected_mcp_plugins"),
+    [
+        (None, ["parent-plugin"], ["parent-plugin"]),
+        ([], ["parent-plugin"], []),
+        (["specialist-plugin"], [], ["specialist-plugin"]),
+        (["specialist-plugin"], ["parent-plugin"], ["specialist-plugin"]),
+    ],
+)
+async def test_batch_task_freezes_effective_subagent_mcp_plugins(
+    monkeypatch,
+    subagent_mcp_plugins,
+    parent_mcp_plugins,
+    expected_mcp_plugins,
+) -> None:
+    submitter = _explicit_submitter()
+    monkeypatch.setattr(tool_module, "get_subagent_batch_submitter", lambda: submitter)
+    monkeypatch.setattr(tool_module, "get_available_subagent_names", lambda **_kwargs: ["specialist"])
+    monkeypatch.setattr(
+        tool_module,
+        "get_subagent_config",
+        lambda *_args, **_kwargs: SubagentConfig(
+            name="specialist",
+            description="Specialist",
+            mcp_plugins=subagent_mcp_plugins,
+        ),
+    )
+
+    runtime = _runtime()
+    runtime.config["metadata"]["allowed_subagents"] = ["specialist"]
+    runtime.config["metadata"]["mcp_plugins"] = parent_mcp_plugins
+
+    await tool_module.batch_task.coroutine(
+        runtime=runtime,
+        title="Specialist batch",
+        items=[BatchTaskItem(key="item-1", prompt="Run check")],
+        subagent_type="specialist",
+        tool_call_id="call-mcp",
+    )
+
+    request = submitter.submit.await_args.args[0]
+    assert request.execution_spec["mcp_plugins"] == expected_mcp_plugins
+    assert request.execution_spec["subagent_config"]["mcp_plugins"] == subagent_mcp_plugins

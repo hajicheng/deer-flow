@@ -526,7 +526,7 @@ class SubagentBatchService:
             tools = await run_assembly(
                 get_available_tools,
                 groups=spec.get("tool_groups"),
-                mcp_plugins=spec.get("mcp_plugins"),
+                mcp_plugins=spec["mcp_plugins"] if "mcp_plugins" in spec else config.mcp_plugins,
                 model_name=effective_model,
                 subagent_enabled=False,
                 include_upload_tool=False,

@@ -120,7 +120,29 @@ def test_legacy_definition_without_reasoning_fields_keeps_defaults(request, stor
     definition = store.get("researcher")
     assert definition.thinking_enabled is None
     assert definition.reasoning_effort is None
+    assert definition.mcp_plugins is None
     assert store.list() == [definition]
+
+
+@pytest.mark.parametrize("store_fixture", ["file_store", "sql_store"])
+def test_mcp_plugins_tri_state_round_trip(request, store_fixture):
+    store = request.getfixturevalue(store_fixture)
+    definition = _definition(mcp_plugins=[" plugin-a ", "plugin-b", "plugin-a"])
+    assert definition.mcp_plugins == ["plugin-a", "plugin-b"]
+
+    store.create(definition)
+    assert store.get("researcher").mcp_plugins == ["plugin-a", "plugin-b"]
+
+    store.update(definition.model_copy(update={"mcp_plugins": []}))
+    assert store.get("researcher").mcp_plugins == []
+
+    store.update(definition.model_copy(update={"mcp_plugins": None}))
+    assert store.get("researcher").mcp_plugins is None
+
+
+def test_managed_subagent_rejects_blank_mcp_plugin_entries():
+    with pytest.raises(ValueError, match="blank"):
+        _definition(mcp_plugins=["valid-id", "   "])
 
 
 def test_sql_signature_detects_update_behind_existing_max_timestamp(sql_store):

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.gateway.deps import is_admin_user, require_admin_user
 from app.gateway.persistent_writes import run_drained_write
+from deerflow.capabilities.runtime import ambiguous_installation_ids, installation_id
 from deerflow.config.app_config import get_app_config
 from deerflow.persistence.managed_subagents import (
     ManagedSubagentDefinition,
@@ -34,6 +35,7 @@ class SubagentResponse(BaseModel):
     tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
     skills: list[str] | None = None
+    mcp_plugins: list[str] | None = None
     model: str = "inherit"
     thinking_enabled: bool | None = None
     reasoning_effort: str | None = None
@@ -58,6 +60,7 @@ class ManagedSubagentCreateRequest(BaseModel):
     tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
     skills: list[str] | None = None
+    mcp_plugins: list[str] | None = None
     model: str = "inherit"
     thinking_enabled: bool | None = None
     reasoning_effort: str | None = None
@@ -73,6 +76,7 @@ class ManagedSubagentUpdateRequest(BaseModel):
     tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
     skills: list[str] | None = None
+    mcp_plugins: list[str] | None = None
     model: str | None = None
     thinking_enabled: bool | None = None
     reasoning_effort: str | None = None
@@ -88,6 +92,26 @@ def _validate_model(model: str, app_config) -> None:
         raise HTTPException(status_code=422, detail=f"Unknown model '{model}'. Use 'inherit' or a configured model name.")
 
 
+def _validate_mcp_plugins(mcp_plugins: list[str] | None, app_config) -> None:
+    if not mcp_plugins:
+        return
+    servers = {name: server.model_dump() for name, server in app_config.extensions.mcp_servers.items()}
+    ambiguous = ambiguous_installation_ids(servers)
+    valid_ids = {installation_id(name, raw) for name, raw in servers.items()} - ambiguous
+    ambiguous_hits = [plugin_id for plugin_id in mcp_plugins if plugin_id in ambiguous]
+    if ambiguous_hits:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Ambiguous MCP plugin ID(s): {', '.join(ambiguous_hits)}. Resolve duplicate capability IDs before binding.",
+        )
+    unknown = [plugin_id for plugin_id in mcp_plugins if plugin_id not in valid_ids]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown MCP plugin ID(s): {', '.join(unknown)}. Select installed deployment MCP plugin IDs.",
+        )
+
+
 def _validate_path_name(name: str, *, for_creation: bool = False) -> str:
     try:
         return normalize_managed_subagent_name(name, for_creation=for_creation)
@@ -100,7 +124,7 @@ def _explicit_overrides(name: str, app_config) -> dict[str, Any]:
     if override is None:
         return {}
     result: dict[str, Any] = {}
-    for field in ("timeout_seconds", "max_turns", "model", "thinking_enabled", "reasoning_effort", "skills"):
+    for field in ("timeout_seconds", "max_turns", "model", "thinking_enabled", "reasoning_effort", "skills", "mcp_plugins"):
         if field not in override.model_fields_set:
             continue
         value = getattr(override, field)
@@ -124,6 +148,7 @@ def _catalog(include_system_prompt: bool) -> SubagentsListResponse:
                 tools=definition.tools,
                 disallowed_tools=definition.disallowed_tools,
                 skills=definition.skills,
+                mcp_plugins=definition.mcp_plugins,
                 model=definition.model,
                 thinking_enabled=definition.thinking_enabled,
                 reasoning_effort=definition.reasoning_effort,
@@ -143,6 +168,7 @@ def _catalog(include_system_prompt: bool) -> SubagentsListResponse:
                 tools=definition.tools,
                 disallowed_tools=definition.disallowed_tools,
                 skills=definition.skills,
+                mcp_plugins=definition.mcp_plugins,
                 model=definition.model,
                 thinking_enabled=definition.thinking_enabled,
                 reasoning_effort=definition.reasoning_effort,
@@ -188,6 +214,7 @@ async def create_managed_subagent(request: Request, body: ManagedSubagentCreateR
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     app_config = await asyncio.to_thread(get_app_config)
     _validate_model(definition.model, app_config)
+    _validate_mcp_plugins(definition.mcp_plugins, app_config)
     if definition.name in BUILTIN_SUBAGENTS or definition.name in app_config.subagents.custom_agents:
         raise HTTPException(status_code=409, detail=f"Subagent name '{definition.name}' is reserved by a built-in or config.yaml definition.")
     store = get_managed_subagent_store(app_config)
@@ -222,6 +249,8 @@ async def update_managed_subagent(name: str, request: Request, body: ManagedSuba
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     _validate_model(updated.model, app_config)
+    if "mcp_plugins" in changes and updated.mcp_plugins != existing.mcp_plugins:
+        _validate_mcp_plugins(updated.mcp_plugins, app_config)
     try:
         await run_drained_write("Update managed subagent", store.update, (FileNotFoundError,), updated)
     except FileNotFoundError:

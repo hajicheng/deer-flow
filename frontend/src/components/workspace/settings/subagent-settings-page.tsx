@@ -32,6 +32,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/core/auth/AuthProvider";
+import { useCapabilityInstallations } from "@/core/capabilities/hooks";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
 import {
@@ -45,9 +46,13 @@ import type { Subagent } from "@/core/subagents";
 import { SettingsSection } from "./settings-section";
 import {
   isValidManagedSubagentName,
+  mcpPluginsFromDraft,
+  mcpPluginsToDraft,
   optionalNameListFromDraft,
   optionalNameListToDraft,
   positiveInteger,
+  sameOptionalStringList,
+  type McpPluginsMode,
   type OptionalNameListMode,
 } from "./subagent-settings-helpers";
 
@@ -61,6 +66,8 @@ type Draft = {
   tools: string;
   skillsMode: OptionalNameListMode;
   skills: string;
+  mcpPluginsMode: McpPluginsMode;
+  mcpPlugins: string[];
   maxTurns: string;
   timeoutSeconds: string;
 };
@@ -75,12 +82,14 @@ const EMPTY_DRAFT: Draft = {
   tools: "",
   skillsMode: "all",
   skills: "",
+  mcpPluginsMode: "inherit",
+  mcpPlugins: [],
   maxTurns: "50",
   timeoutSeconds: "900",
 };
 
 function formatOverrideValue(value: unknown): string {
-  if (Array.isArray(value)) return value.join(", ");
+  if (Array.isArray(value)) return value.length === 0 ? "[]" : value.join(", ");
   if (value && typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
@@ -88,6 +97,7 @@ function formatOverrideValue(value: unknown): string {
 function draftFrom(subagent: Subagent): Draft {
   const tools = optionalNameListToDraft(subagent.tools);
   const skills = optionalNameListToDraft(subagent.skills);
+  const mcpPlugins = mcpPluginsToDraft(subagent.mcp_plugins);
   return {
     name: subagent.name,
     displayName: subagent.display_name ?? "",
@@ -98,6 +108,8 @@ function draftFrom(subagent: Subagent): Draft {
     tools: tools.text,
     skillsMode: skills.mode,
     skills: skills.text,
+    mcpPluginsMode: mcpPlugins.mode,
+    mcpPlugins: mcpPlugins.selected,
     maxTurns: String(subagent.max_turns),
     timeoutSeconds: String(subagent.timeout_seconds),
   };
@@ -279,6 +291,10 @@ function SubagentEditor({
     )
       return;
 
+    const mcpPluginsPayload = mcpPluginsFromDraft(
+      draft.mcpPluginsMode,
+      draft.mcpPlugins,
+    );
     const payload = {
       display_name: draft.displayName.trim() || null,
       description: draft.description.trim(),
@@ -291,10 +307,24 @@ function SubagentEditor({
     };
     try {
       if (isNew) {
-        await create.mutateAsync({ name: draft.name.trim(), ...payload });
+        await create.mutateAsync({
+          name: draft.name.trim(),
+          ...payload,
+          mcp_plugins: mcpPluginsPayload,
+        });
         toast.success(t.settings.subagents.created);
       } else if (value) {
-        await update.mutateAsync({ name: value.name, request: payload });
+        const mcpChanged = !sameOptionalStringList(
+          mcpPluginsPayload,
+          value.mcp_plugins ?? null,
+        );
+        await update.mutateAsync({
+          name: value.name,
+          request: {
+            ...payload,
+            ...(mcpChanged && { mcp_plugins: mcpPluginsPayload }),
+          },
+        });
         toast.success(t.settings.subagents.saved);
       }
       onOpenChange(false);
@@ -390,6 +420,12 @@ function SubagentEditor({
               onTextChange={(text) => set("skills", text)}
             />
           </Field>
+          <McpPluginsField
+            mode={draft.mcpPluginsMode}
+            selected={draft.mcpPlugins}
+            onModeChange={(mode) => set("mcpPluginsMode", mode)}
+            onSelectedChange={(selected) => set("mcpPlugins", selected)}
+          />
           <Field label={t.settings.subagents.maxTurns}>
             <Input
               type="number"
@@ -477,6 +513,109 @@ function OptionalNameListField({
         />
       )}
     </div>
+  );
+}
+
+function McpPluginsField({
+  mode,
+  selected,
+  onModeChange,
+  onSelectedChange,
+}: {
+  mode: McpPluginsMode;
+  selected: string[];
+  onModeChange: (mode: McpPluginsMode) => void;
+  onSelectedChange: (selected: string[]) => void;
+}) {
+  const { t } = useI18n();
+  const query = useCapabilityInstallations("mcp", "deployment");
+  const items = (query.data?.items ?? []).filter(
+    (item) => item.installed && item.selectable !== false,
+  );
+  const options = new Map<string, string>(
+    items.map((item) => [
+      item.id,
+      item.enabled === false
+        ? `${item.name} (${t.settings.subagents.mcpDisabledTag})`
+        : item.name,
+    ]),
+  );
+  for (const id of selected) {
+    if (!options.has(id)) {
+      options.set(
+        id,
+        !query.isLoading && !query.isError
+          ? `${id} (${t.settings.subagents.missing})`
+          : id,
+      );
+    }
+  }
+
+  return (
+    <fieldset className="space-y-2 sm:col-span-2">
+      <legend className="text-sm font-medium">
+        {t.settings.subagents.mcpPlugins}
+      </legend>
+      <Select
+        value={mode}
+        onValueChange={(value) => onModeChange(value as McpPluginsMode)}
+      >
+        <SelectTrigger className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="inherit">
+            {t.settings.subagents.mcpModeInherit}
+          </SelectItem>
+          <SelectItem value="none">
+            {t.settings.subagents.mcpModeNone}
+          </SelectItem>
+          <SelectItem value="selected">
+            {t.settings.subagents.mcpModeSelected}
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      {mode === "selected" && (
+        <div className="space-y-2 rounded-md border p-3">
+          {query.isLoading && (
+            <p className="text-muted-foreground text-xs">{t.common.loading}</p>
+          )}
+          {query.isError && (
+            <p role="alert" className="text-destructive text-xs">
+              {t.settings.subagents.mcpLoadError}
+            </p>
+          )}
+          {!query.isLoading && !query.isError && options.size === 0 && (
+            <p className="text-muted-foreground text-xs">
+              {t.settings.subagents.mcpEmpty}
+            </p>
+          )}
+          {options.size > 0 && (
+            <div className="max-h-40 space-y-2 overflow-y-auto">
+              {[...options].map(([id, label]) => (
+                <label key={id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(id)}
+                    onChange={(event) =>
+                      onSelectedChange(
+                        event.target.checked
+                          ? Array.from(new Set([...selected, id]))
+                          : selected.filter((entry) => entry !== id),
+                      )
+                    }
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <p className="text-muted-foreground text-xs">
+        {t.settings.subagents.mcpToolsHint}
+      </p>
+    </fieldset>
   );
 }
 

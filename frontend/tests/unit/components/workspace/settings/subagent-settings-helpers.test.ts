@@ -2,9 +2,12 @@ import { describe, expect, it } from "@rstest/core";
 
 import {
   isValidManagedSubagentName,
+  mcpPluginsFromDraft,
+  mcpPluginsToDraft,
   optionalNameListFromDraft,
   optionalNameListToDraft,
   positiveInteger,
+  sameOptionalStringList,
 } from "@/components/workspace/settings/subagent-settings-helpers";
 
 describe("managed Subagent optional name lists", () => {
@@ -28,6 +31,35 @@ describe("managed Subagent optional name lists", () => {
 
   it("keeps an empty selected list as [] instead of widening it to null", () => {
     expect(optionalNameListFromDraft("selected", "  ")).toEqual([]);
+  });
+});
+
+describe("managed Subagent MCP plugin selection", () => {
+  it("round-trips inherit, none, and selected tri-state values", () => {
+    expect(mcpPluginsToDraft(null)).toEqual({ mode: "inherit", selected: [] });
+    expect(mcpPluginsToDraft(undefined)).toEqual({
+      mode: "inherit",
+      selected: [],
+    });
+    expect(mcpPluginsToDraft([])).toEqual({ mode: "none", selected: [] });
+    expect(mcpPluginsToDraft(["jira-id", "db-id", "jira-id"])).toEqual({
+      mode: "selected",
+      selected: ["jira-id", "db-id"],
+    });
+
+    expect(mcpPluginsFromDraft("inherit", ["ignored"])).toBeNull();
+    expect(mcpPluginsFromDraft("none", ["ignored"])).toEqual([]);
+    expect(
+      mcpPluginsFromDraft("selected", [" jira-id ", "", "db-id", "jira-id"]),
+    ).toEqual(["jira-id", "db-id"]);
+  });
+
+  it("compares optional plugin lists while preserving tri-state boundaries", () => {
+    expect(sameOptionalStringList(null, undefined)).toBe(true);
+    expect(sameOptionalStringList(null, [])).toBe(false);
+    expect(sameOptionalStringList([], [])).toBe(true);
+    expect(sameOptionalStringList(["a", "b"], ["b", "a"])).toBe(true);
+    expect(sameOptionalStringList(["a"], ["a", "b"])).toBe(false);
   });
 });
 

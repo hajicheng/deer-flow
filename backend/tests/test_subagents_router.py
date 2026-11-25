@@ -342,3 +342,126 @@ async def test_delete_managed_subagent_allows_windows_reserved_names(name: str):
     with pytest.raises(HTTPException) as excinfo:
         await router.delete_managed_subagent(name, _request("admin"))
     assert excinfo.value.status_code == 404
+
+
+async def test_managed_subagent_mcp_plugins_crud_validation_and_overrides():
+    from deerflow.capabilities.runtime import installation_id
+    from deerflow.config.extensions_config import ExtensionsConfig
+    from deerflow.config.subagents_config import SubagentOverrideConfig
+
+    extensions = ExtensionsConfig.model_validate(
+        {
+            "mcpServers": {
+                "jira": {"enabled": True, "capability": {"id": "jira-install-id"}},
+                "disabled-db": {"enabled": False},
+                "dup-a": {"enabled": True, "capability": {"id": "shared-dup"}},
+                "dup-b": {"enabled": True, "capability": {"id": "shared-dup"}},
+            }
+        }
+    )
+    fallback_id = installation_id("disabled-db", {})
+    set_app_config(
+        AppConfig(
+            sandbox=SandboxConfig(use="deerflow.sandbox.local:LocalSandboxProvider"),
+            extensions=extensions,
+            subagents=SubagentsAppConfig(
+                custom_agents={
+                    "config-worker": CustomSubagentConfig(
+                        description="Configured worker",
+                        system_prompt="Prompt.",
+                        mcp_plugins=["jira-install-id"],
+                    )
+                },
+                agents={
+                    "general-purpose": SubagentOverrideConfig(mcp_plugins=[]),
+                },
+            ),
+        )
+    )
+
+    # Unknown MCP plugin ID fails fast with 422 on create.
+    with pytest.raises(HTTPException) as excinfo:
+        await router.create_managed_subagent(
+            _request("admin"),
+            router.ManagedSubagentCreateRequest(
+                name="bad-mcp",
+                description="Bad MCP",
+                system_prompt="Prompt.",
+                mcp_plugins=["nonexistent-id"],
+            ),
+        )
+    assert excinfo.value.status_code == 422
+    assert "Unknown MCP plugin" in str(excinfo.value.detail)
+
+    # Ambiguous capability ID fails fast with 422 on create.
+    with pytest.raises(HTTPException) as excinfo:
+        await router.create_managed_subagent(
+            _request("admin"),
+            router.ManagedSubagentCreateRequest(
+                name="ambig-mcp",
+                description="Ambiguous MCP",
+                system_prompt="Prompt.",
+                mcp_plugins=["shared-dup"],
+            ),
+        )
+    assert excinfo.value.status_code == 422
+    assert "Ambiguous MCP plugin" in str(excinfo.value.detail)
+
+    # Valid explicit + fallback IDs succeed and normalize duplicates.
+    created = await router.create_managed_subagent(
+        _request("admin"),
+        router.ManagedSubagentCreateRequest(
+            name="specialist",
+            description="Domain specialist",
+            system_prompt="Use domain MCP tools.",
+            mcp_plugins=[" jira-install-id ", fallback_id, "jira-install-id"],
+        ),
+    )
+    assert created.mcp_plugins == ["jira-install-id", fallback_id]
+
+    # Catalog surfaces mcp_plugins across builtin, config, managed, and config_overrides.
+    catalog = await router.list_subagents(_request("admin"))
+    by_name = {item.name: item for item in catalog.subagents}
+    assert by_name["general-purpose"].mcp_plugins is None
+    assert by_name["general-purpose"].config_overrides == {"mcp_plugins": []}
+    assert by_name["config-worker"].mcp_plugins == ["jira-install-id"]
+    assert by_name["specialist"].mcp_plugins == ["jira-install-id", fallback_id]
+
+    # Removing an MCP server later must NOT block unrelated updates (e.g. disabling),
+    # while explicitly editing mcp_plugins still rejects unknown IDs and allows clearing.
+    set_app_config(
+        AppConfig(
+            sandbox=SandboxConfig(use="deerflow.sandbox.local:LocalSandboxProvider"),
+            extensions=ExtensionsConfig.model_validate({"mcpServers": {"jira": {"enabled": True, "capability": {"id": "jira-install-id"}}}}),
+        )
+    )
+    disabled = await router.update_managed_subagent(
+        "specialist",
+        _request("admin"),
+        router.ManagedSubagentUpdateRequest(enabled=False),
+    )
+    assert disabled.enabled is False
+    assert disabled.mcp_plugins == ["jira-install-id", fallback_id]
+
+    with pytest.raises(HTTPException) as excinfo:
+        await router.update_managed_subagent(
+            "specialist",
+            _request("admin"),
+            router.ManagedSubagentUpdateRequest(mcp_plugins=["still-unknown"]),
+        )
+    assert excinfo.value.status_code == 422
+
+    # Transition to [] (none) and None (inherit parent) both succeed.
+    no_mcp = await router.update_managed_subagent(
+        "specialist",
+        _request("admin"),
+        router.ManagedSubagentUpdateRequest(mcp_plugins=[]),
+    )
+    assert no_mcp.mcp_plugins == []
+
+    inherited = await router.update_managed_subagent(
+        "specialist",
+        _request("admin"),
+        router.ManagedSubagentUpdateRequest(mcp_plugins=None),
+    )
+    assert inherited.mcp_plugins is None

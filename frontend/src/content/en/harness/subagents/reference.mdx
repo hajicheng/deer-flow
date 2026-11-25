@@ -19,6 +19,7 @@ description: Quick reference for subagent configuration keys, request context ke
 | `subagents.agents.<name>.max_turns`          |                                             |                                                                             |
 | `subagents.agents.<name>.model`              |                                             |                                                                             |
 | `subagents.agents.<name>.skills`             |                                             | `null` inherits all, `[]` none                                              |
+| `subagents.agents.<name>.mcp_plugins`        |                                             | Stable MCP installation IDs: `null` inherits parent, `[]` none              |
 | `subagents.agents.<name>.token_budget`       |                                             |                                                                             |
 | `subagents.custom_agents.<name>.*`           |                                             | `description` and `system_prompt` required; `max_turns` 50, `timeout_seconds` 900 |
 | `subagent_runtime.max_running`               | 3                                           | Process-wide concurrency, 1 to 64, restart required                         |

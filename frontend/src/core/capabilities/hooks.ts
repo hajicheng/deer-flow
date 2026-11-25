@@ -30,9 +30,14 @@ export function useCapabilityCatalog() {
     staleTime: 60_000,
   });
 }
-export function useCapabilityInstallations(adapter: string) {
+export type CapabilityInstallationScope = "deployment" | "user" | "all";
+
+export function useCapabilityInstallations(
+  adapter: string,
+  scope: CapabilityInstallationScope = "all",
+) {
   const { user } = useAuth();
-  return useQuery(installationQuery(adapter, user?.id));
+  return useQuery(installationQuery(adapter, user?.id, scope));
 }
 export function useInstallCapability() {
   const client = useQueryClient();
@@ -57,12 +62,19 @@ export function useInstallCapability() {
   });
 }
 
-export function installationQuery(adapter: string, userId?: string) {
+export function installationQuery(
+  adapter: string,
+  userId?: string,
+  scope: CapabilityInstallationScope = "all",
+) {
   return {
-    queryKey: ["capabilities", "installations", adapter, userId],
+    queryKey:
+      scope === "all"
+        ? ["capabilities", "installations", adapter, userId]
+        : ["capabilities", "installations", adapter, userId, scope],
     queryFn: () =>
       request<InstallationList>(
-        `installations/${encodeURIComponent(adapter)}?scope=all`,
+        `installations/${encodeURIComponent(adapter)}?scope=${encodeURIComponent(scope)}`,
       ),
   };
 }

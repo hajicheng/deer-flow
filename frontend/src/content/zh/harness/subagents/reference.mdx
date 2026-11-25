@@ -19,6 +19,7 @@ description: 子 Agent 相关的配置键、请求上下文键、工具签名、
 | `subagents.agents.<name>.max_turns`        |                                          |                                                                       |
 | `subagents.agents.<name>.model`            |                                          |                                                                       |
 | `subagents.agents.<name>.skills`           |                                          | `null` 继承全部，`[]` 无                                              |
+| `subagents.agents.<name>.mcp_plugins`      |                                          | 稳定 MCP 安装 ID：`null` 继承父智能体，`[]` 禁用 MCP                  |
 | `subagents.agents.<name>.token_budget`     |                                          |                                                                       |
 | `subagents.custom_agents.<name>.*`         |                                          | `description`、`system_prompt` 必填；`max_turns` 50、`timeout_seconds` 900 |
 | `subagent_runtime.max_running`             | 3                                        | 进程级并发，1 到 64，重启生效                                         |

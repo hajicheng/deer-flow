@@ -1225,3 +1225,94 @@ async def test_terminal_item_cleanup_fence_budget_does_not_renew_forever(monkeyp
         execution_done.set()
         await asyncio.gather(*workers, return_exceptions=True)
         registry.cleanup("execution-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spec_override", "config_mcp_plugins", "expected_mcp_plugins"),
+    [
+        ({"mcp_plugins": ["spec-plugin"]}, ["config-plugin"], ["spec-plugin"]),
+        ({"mcp_plugins": []}, ["config-plugin"], []),
+        ({}, ["config-plugin"], ["config-plugin"]),
+        ({}, [], []),
+    ],
+)
+async def test_batch_service_passes_resolved_mcp_plugins_to_tool_assembly(
+    monkeypatch,
+    spec_override,
+    config_mcp_plugins,
+    expected_mcp_plugins,
+) -> None:
+    captured_kwargs: list[dict] = []
+
+    def record_tools(**kwargs):
+        captured_kwargs.append(kwargs)
+        return []
+
+    class DummyExecutor:
+        def __init__(self, **_kwargs):
+            pass
+
+        def execute_async(self, _prompt, task_id=None):
+            return task_id or "execution-mcp"
+
+    monkeypatch.setattr("deerflow.tools.get_available_tools", record_tools)
+    monkeypatch.setattr(service_module, "SubagentStatus", FakeStatus)
+    monkeypatch.setattr(service_module, "SubagentExecutor", DummyExecutor)
+    monkeypatch.setattr(service_module, "resolve_subagent_model_name", lambda *_a, **_k: "model-a")
+    monkeypatch.setattr(service_module, "request_cancel_background_task", lambda _id: None)
+    monkeypatch.setattr(
+        service_module,
+        "get_background_task_result",
+        lambda _id: SimpleNamespace(
+            status=FakeStatus.COMPLETED,
+            result="ok",
+            error=None,
+            stop_reason=None,
+            token_usage_records=[],
+        ),
+    )
+
+    finalized: list[dict] = []
+
+    async def finalize_item(item_id, **kwargs):
+        finalized.append({"item_id": item_id, **kwargs})
+
+    async def renew_item_lease(item_id, **_kwargs):
+        return {"valid": True, "cancel_requested": False}
+
+    service = SubagentBatchService(
+        repository=SimpleNamespace(finalize_item=finalize_item, renew_item_lease=renew_item_lease),
+        config=SubagentBatchesConfig(),
+        runtime_config=SubagentRuntimeConfig(),
+        app_config=SimpleNamespace(),
+    )
+    item = {
+        "id": "item-mcp",
+        "item_key": "k1",
+        "prompt": "do work",
+        "batch": {
+            "id": "batch-mcp",
+            "thread_id": "thread-1",
+            "user_id": "user-1",
+            "run_id": None,
+            "execution_spec": {
+                "subagent_config": {
+                    "name": "specialist",
+                    "description": "Specialist",
+                    "system_prompt": "Work.",
+                    "mcp_plugins": config_mcp_plugins,
+                    "model": "model-a",
+                    "max_turns": 5,
+                    "timeout_seconds": 10,
+                },
+                **spec_override,
+            },
+        },
+    }
+
+    await service._execute_item(item, lease_owner="claim-mcp")
+
+    assert len(finalized) == 1 and finalized[0]["succeeded"] is True
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["mcp_plugins"] == expected_mcp_plugins

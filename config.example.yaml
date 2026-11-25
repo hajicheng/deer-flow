@@ -2168,13 +2168,16 @@ subagent_runtime:
 #       # skills:               # Skill discovery/activation allowlist (default: all enabled)
 #       #   - web-search
 #       #   - data-analysis
+#       # mcp_plugins:          # Stable MCP installation IDs (null = inherit parent, [] = none)
+#       #   - "<mcp-installation-id>"
 #     bash:
 #       timeout_seconds: 300   # 5 minutes for quick command execution
 #       max_turns: 80
 #       # skills: []            # No discoverable/activatable skills for bash agent
+#       # mcp_plugins: []       # Disable all MCP plugins for bash agent
 #
 #   # Custom subagent types: define specialized agents with their own prompts,
-#   # tools, skills, and model configuration. Custom agents are available via
+#   # tools, skills, MCP plugins, and model configuration. Custom agents are available via
 #   # the `task` tool alongside built-in types (general-purpose, bash).
 #   # custom_agents:
 #   #   analysis:
@@ -2191,6 +2194,8 @@ subagent_runtime:
 #   #     skills:                 # Skill discovery/activation allowlist (null = all, [] = none)
 #   #       - data-analysis
 #   #       - visualization
+#   #     mcp_plugins:            # Stable MCP installation IDs (null = inherit parent, [] = none)
+#   #       - "<mcp-installation-id>"
 #   #     model: inherit          # 'inherit' uses parent's model
 #   #     thinking_enabled: true   # Enable thinking/reasoning (default: false)
 #   #     reasoning_effort: medium  # Use an effort value or alias supported by this model

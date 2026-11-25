@@ -24,6 +24,12 @@ class SubagentConfig:
                 disabled for this subagent. Skill bodies load lazily at runtime;
                 allowed-tools is compatibility metadata only and never restricts
                 this subagent's tools.
+        mcp_plugins: Optional list of stable MCP installation IDs to bind for
+                this subagent. If None, inherits the parent agent's MCP plugin
+                selection. If empty, binds no MCP plugins. If non-empty, binds
+                only those installation IDs independent of the parent agent's
+                selection (subject to host authorization, per-agent credential
+                policy, and tool allow/deny filters).
         model: Model to use - 'inherit' uses parent's model.
         thinking_enabled: Whether to enable thinking/reasoning for this subagent.
                 None means use default (False).
@@ -48,6 +54,7 @@ class SubagentConfig:
     tools: list[str] | None = None
     disallowed_tools: list[str] | None = field(default_factory=lambda: ["task"])
     skills: list[str] | None = None
+    mcp_plugins: list[str] | None = None
     model: str = "inherit"
     thinking_enabled: bool | None = None
     reasoning_effort: str | None = None
@@ -75,3 +82,22 @@ def resolve_subagent_model_name(config: SubagentConfig, parent_model: str | None
 
         app_config = get_app_config()
     return _default_model_name(app_config)
+
+
+def resolve_subagent_mcp_plugins(
+    config: SubagentConfig,
+    parent_mcp_plugins: list[str] | None,
+) -> list[str] | None:
+    """Resolve the effective MCP plugin selection for a subagent.
+
+    Tri-state semantics matching ``AgentConfig.mcp_plugins``:
+    - ``config.mcp_plugins is None``: inherit the parent agent's selection.
+    - ``config.mcp_plugins == []``: disable all MCP plugins for this subagent.
+    - non-empty ``config.mcp_plugins``: bind only the listed installation IDs,
+      independent of the parent agent's selection.
+    """
+    if config.mcp_plugins is not None:
+        return list(config.mcp_plugins)
+    if parent_mcp_plugins is not None:
+        return list(parent_mcp_plugins)
+    return None

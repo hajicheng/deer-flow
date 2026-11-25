@@ -4133,3 +4133,167 @@ def test_task_tool_binds_the_preflight_config_on_the_happy_path(monkeypatch):
 
     assert message.additional_kwargs[SUBAGENT_STATUS_KEY] == "completed"
     assert captured["config"].model == "inherit"
+
+
+@pytest.mark.parametrize(
+    ("subagent_mcp_plugins", "parent_mcp_plugins", "expected_mcp_plugins"),
+    [
+        (None, None, None),
+        (None, [], []),
+        (None, ["parent-plugin"], ["parent-plugin"]),
+        ([], None, []),
+        ([], ["parent-plugin"], []),
+        (["specialist-plugin"], None, ["specialist-plugin"]),
+        (["specialist-plugin"], [], ["specialist-plugin"]),
+        (["specialist-plugin"], ["parent-plugin"], ["specialist-plugin"]),
+    ],
+)
+def test_task_tool_resolves_independent_subagent_mcp_plugins(
+    monkeypatch,
+    subagent_mcp_plugins,
+    parent_mcp_plugins,
+    expected_mcp_plugins,
+):
+    """Subagent mcp_plugins tri-state overrides parent selection when set and inherits when None."""
+    config = SubagentConfig(
+        name="specialist",
+        description="Specialist worker",
+        system_prompt="Base prompt",
+        mcp_plugins=subagent_mcp_plugins,
+        max_turns=20,
+        timeout_seconds=10,
+    )
+    runtime = _make_runtime()
+    runtime.config["metadata"]["mcp_plugins"] = parent_mcp_plugins
+    get_available_tools = MagicMock(return_value=[])
+
+    class DummyExecutor:
+        def __init__(self, **kwargs):
+            pass
+
+        def execute_async(self, prompt, task_id=None):
+            return task_id or "generated-task-id"
+
+    monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
+    monkeypatch.setattr(task_tool_module, "SubagentExecutor", DummyExecutor)
+    monkeypatch.setattr(task_tool_module, "get_available_subagent_names", lambda **kwargs: ["specialist"])
+    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda *args, **kwargs: config)
+    monkeypatch.setattr(task_tool_module, "get_background_task_result", lambda _: _make_result(FakeSubagentStatus.COMPLETED, result="done"))
+    monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: lambda _: None)
+    monkeypatch.setattr(task_tool_module.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr("deerflow.tools.get_available_tools", get_available_tools)
+
+    message = _task_tool_message(
+        _run_task_tool(
+            runtime=runtime,
+            description="delegate specialist",
+            prompt="do work",
+            subagent_type="specialist",
+            tool_call_id="tc-subagent-mcp",
+        )
+    )
+
+    assert message.additional_kwargs[SUBAGENT_STATUS_KEY] == "completed"
+    call_kwargs = get_available_tools.call_args.kwargs
+    if expected_mcp_plugins is None:
+        assert "mcp_plugins" not in call_kwargs
+    else:
+        assert call_kwargs["mcp_plugins"] == expected_mcp_plugins
+
+
+def test_subagent_independent_mcp_plugins_respects_filtering_and_host_authz(monkeypatch):
+    """A specialist subagent can bind an MCP plugin excluded by the lead agent,
+    while host tool authorization still enforces Layer-1 deny rules."""
+    from langchain_core.tools import tool as lc_tool
+
+    from deerflow.authz.tool_filter import apply_tool_authorization
+    from deerflow.config.app_config import AppConfig
+    from deerflow.config.authorization_config import AuthorizationConfig, AuthorizationProviderConfig
+    from deerflow.config.extensions_config import ExtensionsConfig
+    from deerflow.config.sandbox_config import SandboxConfig
+    from deerflow.config.tool_search_config import ToolSearchConfig
+    from deerflow.tools import get_available_tools
+
+    @lc_tool
+    def jira_search(query: str) -> str:
+        """Search Jira tickets."""
+        return query
+
+    @lc_tool
+    def jira_delete(ticket_id: str) -> str:
+        """Delete a Jira ticket."""
+        return ticket_id
+
+    @lc_tool
+    def slack_post(text: str) -> str:
+        """Post to Slack."""
+        return text
+
+    jira_search.metadata = {"deerflow_mcp": True, "deerflow_mcp_source": {"server_name": "jira"}}
+    jira_delete.metadata = {"deerflow_mcp": True, "deerflow_mcp_source": {"server_name": "jira"}}
+    slack_post.metadata = {"deerflow_mcp": True, "deerflow_mcp_source": {"server_name": "slack"}}
+
+    extensions_cfg = ExtensionsConfig.model_validate(
+        {
+            "mcpServers": {
+                "jira": {"enabled": True, "capability": {"id": "jira-id"}},
+                "slack": {"enabled": True, "capability": {"id": "slack-id"}},
+            }
+        }
+    )
+    monkeypatch.setattr(ExtensionsConfig, "from_file", lambda *args: extensions_cfg)
+    monkeypatch.setattr("deerflow.mcp.cache.get_cached_mcp_tools", lambda: [jira_search, jira_delete, slack_post])
+    monkeypatch.setattr("deerflow.mcp.user_tools.get_user_mcp_tools", lambda: ([], ExtensionsConfig()))
+
+    app_config = AppConfig(
+        models=[],
+        sandbox=SandboxConfig(use="deerflow.sandbox.local:LocalSandboxProvider"),
+        extensions=extensions_cfg,
+        tool_search=ToolSearchConfig(enabled=False),
+        authorization=AuthorizationConfig(
+            enabled=True,
+            provider=AuthorizationProviderConfig(
+                use="deerflow.authz.rbac:RbacAuthorizationProvider",
+                config={
+                    "roles": {
+                        "user": {
+                            "tools": {"allow": "*", "deny": ["jira_delete"]},
+                        }
+                    }
+                },
+            ),
+        ),
+    )
+
+    # Lead agent binds no MCP plugins (mcp_plugins=[]), so it sees zero MCP tools.
+    lead_tools = get_available_tools(app_config=app_config, mcp_plugins=[])
+    assert {t.name for t in lead_tools} & {"jira_search", "jira_delete", "slack_post"} == set()
+
+    # Specialist subagent independently binds only jira-id.
+    specialist_cfg = SubagentConfig(
+        name="jira-worker",
+        description="Handles Jira tasks",
+        system_prompt="Handle Jira.",
+        mcp_plugins=["jira-id"],
+    )
+    from deerflow.subagents.config import resolve_subagent_mcp_plugins
+
+    effective = resolve_subagent_mcp_plugins(specialist_cfg, [])
+    assert effective == ["jira-id"]
+    raw_subagent_tools = get_available_tools(app_config=app_config, mcp_plugins=effective, subagent_enabled=False)
+    raw_names = {t.name for t in raw_subagent_tools}
+    assert "jira_search" in raw_names
+    assert "jira_delete" in raw_names
+    assert "slack_post" not in raw_names
+
+    # Layer-1 host authorization still blocks jira_delete even though the subagent bound jira-id.
+    authorized_tools, provider = apply_tool_authorization(
+        raw_subagent_tools,
+        context={"user_id": "user-1", "user_role": "user"},
+        app_config=app_config,
+    )
+    assert provider is not None
+    final_names = {t.name for t in authorized_tools}
+    assert "jira_search" in final_names
+    assert "jira_delete" not in final_names
+    assert "slack_post" not in final_names
